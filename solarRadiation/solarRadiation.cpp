@@ -735,7 +735,8 @@ bool computeRadiationRsun(Crit3DRadiationSettings* radSettings, float temperatur
         clearSkyTransmissivity = radSettings->getClearSky();
 
         // noon
-        Crit3DTime noonTime = myTime;
+        Crit3DTime noonTime;
+        noonTime.date = myTime.date;
         noonTime.time = 12*3600;
         if (radSettings->gisSettings->isUTC)
         {
