@@ -14,10 +14,15 @@
         int         m_count;
         int			m_type;
         int         m_fields;
+
+        double      m_minBound[4] = {};
+        double      m_maxBound[4] = {};
+
         std::string m_filepath;
         std::vector<std::string> m_fieldsList;
         std::vector<DBFFieldType> m_fieldsTypeList;
         std::vector< std::vector<std::vector<unsigned int>>> holes;
+
         bool        m_isWGS84;
         bool        m_isNorth;
         int         m_utmZone;
@@ -28,12 +33,15 @@
         Crit3DShapeHandler();
         ~Crit3DShapeHandler();
 
-        bool open(std::string filename);
-        bool openDBF(std::string filename);
-        bool openSHP(std::string filename);
+        std::string errorString;
+
+        bool open(const std::string &filename, bool isWrite);
+        bool openDBF(const std::string &filename);
+        bool openSHP(const std::string &filename);
         void newShapeFile(std::string filename, int nShapeType);
-        bool isWGS84Proj(std::string prjFileName);
-        bool setUTMzone(std::string prjFileName);
+        bool isWGS84Proj(const std::string &prjFileName);
+        bool setUTMzone(const std::string &prjFileName);
+
         void close();
         void closeDBF();
         void closeSHP();
@@ -105,6 +113,8 @@
 
         int getNrParts() const { return m_parts; }
         int getNrHoles() const { return m_holes; }
+
+        bool getBounds(double &xmin, double &xmax, double &ymin, double &ymax) const;
     };
 
 

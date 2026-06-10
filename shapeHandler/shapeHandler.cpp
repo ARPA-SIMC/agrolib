@@ -27,13 +27,15 @@
 #include "basicMath.h"
 #include "shapeHandler.h"
 #include "commonConstants.h"
+
 #include <fstream>
 #include <algorithm>
 #include <string.h>
+#include <filesystem>
 
 
 Crit3DShapeHandler::Crit3DShapeHandler()
-    : m_handle(nullptr), m_dbf(nullptr), m_count(0), m_type(0)
+    : m_handle(nullptr), m_dbf(nullptr), m_count(0), m_type(0), m_fields(0), errorString("")
 { }
 
 
@@ -45,11 +47,11 @@ Crit3DShapeHandler::~Crit3DShapeHandler()
 
 void Crit3DShapeHandler::close()
 {
-    if ((m_handle != nullptr) || (m_dbf != nullptr))
-    {
+    if (m_handle)
         SHPClose(m_handle);
+
+    if (m_dbf)
         DBFClose(m_dbf);
-    }
 
     m_fieldsList.clear();
     m_fieldsTypeList.clear();
@@ -57,38 +59,64 @@ void Crit3DShapeHandler::close()
 
     m_handle = nullptr;
     m_dbf = nullptr;
+
+    m_count = 0;
+    m_type = 0;
+    m_fields = 0;
 }
 
 
 void Crit3DShapeHandler::closeDBF()
 {
-    if (m_dbf != nullptr)
-    {
+    if (m_dbf )
         DBFClose(m_dbf);
-    }
+
     m_dbf = nullptr;
 }
 
 void Crit3DShapeHandler::closeSHP()
 {
-    if ((m_handle != nullptr))
-    {
+    if (m_handle)
         SHPClose(m_handle);
-    }
+
     m_handle = nullptr;
 }
 
 
-bool Crit3DShapeHandler::open(std::string filename)
+bool Crit3DShapeHandler::open(const std::string &filename, bool isWrite)
 {
     close();
-    m_handle = SHPOpen(filename.c_str(), "r+b");
-    m_dbf = DBFOpen(filename.c_str(), "r+b");
-    m_filepath = filename;
-    if ( (m_handle == nullptr) || (m_dbf == nullptr)) return false;
 
-    SHPGetInfo(m_handle, &m_count, &m_type, nullptr, nullptr);
+    std::string pszAccess = "rb";   // default: only read
+    if (isWrite)
+        pszAccess = "r+b";          // read/write
+
+    m_handle = SHPOpen(filename.c_str(), pszAccess.c_str());
+    if (! m_handle)
+    {
+        errorString = "failed to open .shp file";
+        return false;
+    }
+
+    m_dbf = DBFOpen(filename.c_str(), pszAccess.c_str());
+    if (! m_dbf)
+    {
+        errorString = "failed to open .dbf file";
+        close();
+        return false;
+    }
+
+    SHPGetInfo(m_handle, &m_count, &m_type, m_minBound, m_maxBound);
     m_fields = m_dbf->nFields;
+
+    if (m_count <= 0)
+    {
+        errorString = "Wrong shapefile (no shapes)";
+        close();
+        return false;
+    }
+
+    m_filepath = filename;
 
     std::vector<char> fieldName(XBASE_FLDNAME_LEN_READ + 1);
     DBFFieldType fieldType;
@@ -102,32 +130,27 @@ bool Crit3DShapeHandler::open(std::string filename)
         m_fieldsTypeList.push_back(fieldType);
     }
 
-    // check if WGS84 PROJ and set UTM
-    std::string filePrj = filename;
-    std::string::size_type i = filePrj.rfind('.', filePrj.length());
-    std::string prjExt = "prj";
-    if (i != std::string::npos)
-    {
-        filePrj.replace(i+1, prjExt.length(), prjExt);
-    }
-    isWGS84Proj(filePrj);
-    setUTMzone(filePrj);
+    // check if PROJ is WGS84 and set UTM zone
+    std::filesystem::path prjPath(filename);
+    prjPath.replace_extension(".prj");
+
+    isWGS84Proj(prjPath.string());
+    setUTMzone(prjPath.string());
 
     // save holes inside parts
     ShapeObject myShape;
-    Point<double> point;
 
     m_parts = 0;
     m_holes = 0;
     holes.clear();
     holes.resize(unsigned(m_count));
 
-    std::vector<ShapeObject::Part> shapeParts;
-
-    for (unsigned int i = 0; i < unsigned(m_count); i++)
+    for (int i = 0; i < m_count; ++i)
     {
-        getShape(int(i), myShape);
-        shapeParts = myShape.getParts();
+        if (! getShape(i, myShape))
+            continue;
+
+        const auto& shapeParts = myShape.getParts();
 
         unsigned int nrParts = myShape.getPartCount();
         m_parts += nrParts;
@@ -139,19 +162,35 @@ bool Crit3DShapeHandler::open(std::string filename)
             // holes
             if (shapeParts[j].hole)
             {
-                m_holes++;
                 // check first point
                 unsigned long offset = shapeParts[j].offset;
-                point = myShape.getVertex(offset);
-                int index = myShape.getIndexPart(point.x, point.y);
-                if (index != NODATA)
+                if (offset < myShape.getVertexCount())
                 {
-                    holes[i][unsigned(index)].push_back(j);
+                    Point<double> point = myShape.getVertex(offset);
+                    int index = myShape.getIndexPart(point.x, point.y);
+                    if (index != NODATA && index >= 0 && static_cast<unsigned>(index) < nrParts)
+                    {
+                        holes[i][index].push_back(j);
+                        m_holes++;
+                    }
                 }
             }
         }
-        shapeParts.clear();
     }
+
+    return true;
+}
+
+
+bool Crit3DShapeHandler::getBounds(double &xMin, double &yMin, double &xMax, double &yMax) const
+{
+    if (! m_handle || ! m_count)
+        return false;
+
+    xMin = m_minBound[0];
+    yMin = m_minBound[1];
+    xMax = m_maxBound[0];
+    yMax = m_maxBound[1];
 
     return true;
 }
@@ -165,7 +204,7 @@ void Crit3DShapeHandler::newShapeFile(std::string filename, int nShapeType)
 }
 
 
-bool Crit3DShapeHandler::openDBF(std::string filename)
+bool Crit3DShapeHandler::openDBF(const std::string &filename)
 {
     closeDBF();
     m_dbf = DBFOpen(filename.c_str(), "r+b");
@@ -191,7 +230,7 @@ bool Crit3DShapeHandler::openDBF(std::string filename)
 }
 
 
-bool Crit3DShapeHandler::openSHP(std::string filename)
+bool Crit3DShapeHandler::openSHP(const std::string &filename)
 {
     closeSHP();
     m_handle = SHPOpen(filename.c_str(), "r+b");
@@ -202,7 +241,7 @@ bool Crit3DShapeHandler::openSHP(std::string filename)
 }
 
 
-bool Crit3DShapeHandler::isWGS84Proj(std::string prjFileName)
+bool Crit3DShapeHandler::isWGS84Proj(const std::string &prjFileName)
 {
     std::ifstream prjFile (prjFileName);
     std::string line;
@@ -236,7 +275,7 @@ bool Crit3DShapeHandler::isWGS84Proj(std::string prjFileName)
 }
 
 
-bool Crit3DShapeHandler::setUTMzone(std::string prjFileName)
+bool Crit3DShapeHandler::setUTMzone(const std::string &prjFileName)
 {
     std::ifstream prjFile (prjFileName);
     std::string line;
