@@ -215,7 +215,7 @@ int CriteriaOutputProject::initializeProject(const QString &settingsFileName, co
 
     if (! readSettings())
     {
-        projectError = "Read settings: " + projectError;
+        projectError = "Reading settings: " + settingsFileName + "\nError: " + projectError;
         return ERROR_SETTINGS_MISSINGDATA;
     }
 
@@ -308,7 +308,7 @@ bool CriteriaOutputProject::readSettings()
         variableListFileName = QDir::cleanPath(path + variableListFileName);
     }
 
-    bool addDate = projectSettings->value("add_date_to_filename","").toBool();
+    bool isAddDate = projectSettings->value("add_date_to_filename","").toBool();
 
     outputCsvFileName = projectSettings->value("csv_output","").toString();
     if (! outputCsvFileName.isEmpty())
@@ -317,12 +317,15 @@ bool CriteriaOutputProject::readSettings()
         {
             outputCsvFileName = QDir::cleanPath(path + outputCsvFileName);
         }
+
         if (outputCsvFileName.right(4) == ".csv")
         {
             outputCsvFileName = outputCsvFileName.left(outputCsvFileName.length()-4);
         }
 
-        if (addDate) outputCsvFileName += "_" + dateStr;
+        if (isAddDate)
+            outputCsvFileName += "_" + dateStr;
+
         outputCsvFileName += ".csv";
     }
 
@@ -383,23 +386,30 @@ bool CriteriaOutputProject::readSettings()
     // default threshold
     if (aggregationThreshold == "") aggregationThreshold = "0.5";
 
-    addDate = projectSettings->value("add_date_to_filename","").toBool();
+    isAddDate = projectSettings->value("add_date_to_filename","").toBool();
 
     // aggregation output file name
     outputAggrCsvFileName = projectSettings->value("aggregation_output","").toString();
     if (! outputAggrCsvFileName.isEmpty())
     {
+        if (outputAggrCsvFileName.at(0) == '.')
+            outputAggrCsvFileName = QDir::cleanPath(path + outputAggrCsvFileName);
+
         if (outputAggrCsvFileName.right(4) == ".csv")
             outputAggrCsvFileName = outputAggrCsvFileName.left(outputAggrCsvFileName.length()-4);
 
-        if (addDate)
+        if (isAddDate)
             outputAggrCsvFileName += "_" + dateStr;
 
         outputAggrCsvFileName += ".csv";
-
-        if (outputAggrCsvFileName.at(0) == '.')
-            outputAggrCsvFileName = QDir::cleanPath(path + outputAggrCsvFileName);
     }
+
+    if (outputAggrCsvFileName == outputCsvFileName)
+    {
+        projectError = "'aggregation_output' is equal to 'csv_output'";
+        return false;
+    }
+
     projectSettings->endGroup();
 
     // MAPS
@@ -865,6 +875,11 @@ int CriteriaOutputProject::createAggregationFile(bool isReorder)
     }
 
     QString outputAggrShapeFileName = cloneShapeFile(aggregationShapeFileName, outputAggrShapePath);
+    if (outputAggrShapeFileName.isEmpty())
+    {
+        projectError = "Error creating shapefile: " + outputAggrShapePath;
+        return ERROR_SHAPEFILE;
+    }
 
     if (! shapeRef.open(outputAggrShapeFileName.toStdString(), true))
     {
@@ -894,7 +909,7 @@ int CriteriaOutputProject::createAggregationFile(bool isReorder)
     // check utm zone
     if (shapeRef.getUtmZone() != shapeVal.getUtmZone())
     {
-        projectError = "utm zone: different utm zones" ;
+        projectError = "Different utm zones in the shapefiles" ;
         return ERROR_SHAPEFILE;
     }
 
@@ -909,34 +924,36 @@ int CriteriaOutputProject::createAggregationFile(bool isReorder)
     logger.writeInfo("output csv file: " + outputAggrCsvFileName);
     logger.writeInfo("Compute aggregation...");
 
-    //shape to raster
+    logger.writeInfo("Reference shape to raster...");
     gis::Crit3DRasterGrid rasterRef;
-    gis::Crit3DRasterGrid rasterVal;
     initializeRasterFromShape(shapeRef, rasterRef, cellSize);
-    initializeRasterFromShape(shapeVal, rasterVal, cellSize);
-
     fillRasterWithShapeNumber(rasterRef, shapeRef);
+
+    logger.writeInfo("Values shape to raster...");
+    gis::Crit3DRasterGrid rasterVal;
+    initializeRasterFromShape(shapeVal, rasterVal, cellSize);
     fillRasterWithShapeNumber(rasterVal, shapeVal);
 
+    logger.writeInfo("Matrix Analysis...");
     std::vector <int> vectorNull;
     std::vector <std::vector<int> > matrix = computeMatrixAnalysis(shapeRef, shapeVal, rasterRef, rasterVal, vectorNull);
+
     bool isOk = false;
     for(int i=0; i < aggregationVariable.outputVarName.size(); i++)
     {
         logger.writeInfo(aggregationVariable.outputVarName[i]);
+        std::string shapeFieldName = aggregationVariable.inputFieldName[i].toStdString();
 
         std::string error;
         if (aggregationVariable.aggregationType[i] == "MAJORITY")
         {
             isOk = zonalStatisticsShapeMajority(shapeRef, shapeVal, matrix, vectorNull,
-                                                aggregationVariable.inputFieldName[i].toStdString(),
-                                                aggregationVariable.outputVarName[i].toStdString(),
-                                                threshold, error);
+                                                shapeFieldName, shapeFieldName, threshold, error);
         }
         else
         {
-            isOk = zonalStatisticsShape(shapeRef, shapeVal, matrix, vectorNull, aggregationVariable.inputFieldName[i].toStdString(),
-                                        aggregationVariable.outputVarName[i].toStdString(),
+            isOk = zonalStatisticsShape(shapeRef, shapeVal, matrix, vectorNull,
+                                        shapeFieldName, shapeFieldName,
                                         aggregationVariable.aggregationType[i].toStdString(),
                                         threshold, error);
         }
@@ -962,7 +979,8 @@ int CriteriaOutputProject::createAggregationFile(bool isReorder)
 
     // write csv aggregation data
     int result = writeCsvAggrFromShape(shapeRef, outputAggrCsvFileName, dateComputation,
-                                 aggregationVariable.outputVarName, aggregationShapeField, projectError);
+                                       aggregationVariable.inputFieldName, aggregationVariable.outputVarName,
+                                       aggregationShapeField, projectError);
     shapeRef.close();
 
     if (result == CRIT1D_OK)
