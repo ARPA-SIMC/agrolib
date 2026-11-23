@@ -506,7 +506,7 @@ void RasterObject::setMapExtents()
     geoMap->bottomLeft.longitude = std::max(-180., botLeft.x());
     geoMap->bottomLeft.latitude = std::max(-84., botLeft.y());
     geoMap->topRight.longitude = std::min(180., topRight.x());
-    geoMap->topRight.latitude = std::min(8., topRight.y());
+    geoMap->topRight.latitude = std::min(84., topRight.y());
 }
 
 
