@@ -1,6 +1,3 @@
-#include "project.h"
-#include "dbArkimet.h"
-#include "dbMeteoGrid.h"
 #include "commonConstants.h"
 #include "basicMath.h"
 #include "spatialControl.h"
@@ -20,14 +17,19 @@
 #include "waterTableWidget.h"
 #include "utilities.h"
 #include "dialogNewPoint.h"
+#include "project.h"
+#include "dbArkimet.h"
+#include "dbMeteoGrid.h"
 
 #include <iostream>
+#include <string>
+#include <unordered_map>
+
 #include <QDir>
 #include <QFile>
 #include <QSqlQuery>
 #include <QMessageBox>
-#include <string>
-#include <unordered_map>
+#include <QTimeZone>
 
 #include <omp.h>
 
@@ -1668,11 +1670,14 @@ bool Project::loadMeteoPointsData_singleDataset(const QDate &firstDate, const QD
 
 void Project::loadMeteoGridData(const QDate &firstDate, const QDate &lastDate, bool showInfo)
 {
-    if (this->meteoGridDbHandler != nullptr)
+    if (meteoGridDbHandler != nullptr)
     {
-        this->loadMeteoGridDailyData(firstDate, lastDate, showInfo);
-        this->loadMeteoGridHourlyData(QDateTime(firstDate, QTime(1,0), Qt::UTC), QDateTime(lastDate.addDays(1), QTime(0,0), Qt::UTC), showInfo);
-        this->loadMeteoGridMonthlyData(firstDate, lastDate, showInfo);
+        loadMeteoGridDailyData(firstDate, lastDate, showInfo);
+
+        loadMeteoGridHourlyData(QDateTime(firstDate, QTime(1,0), QTimeZone::utc()),
+                                QDateTime(lastDate.addDays(1), QTime(0,0), QTimeZone::utc()), showInfo);
+
+        loadMeteoGridMonthlyData(firstDate, lastDate, showInfo);
     }
 }
 
@@ -5919,7 +5924,7 @@ bool Project::setLogFile(QString myFileName)
 
     QDate myQDate = QDateTime().currentDateTime().date();
     QTime myQTime = QDateTime().currentDateTime().time();
-    QString myDate = QDateTime(myQDate, myQTime, Qt::UTC).currentDateTime().toString("yyyyMMdd_HHmm");
+    QString myDate = QDateTime(myQDate, myQTime, QTimeZone::utc()).currentDateTime().toString("yyyyMMdd_HHmm");
 
     logFileName = logFilePath + myDate + "_" + endLogFileName;
 

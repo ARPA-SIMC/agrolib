@@ -69,8 +69,8 @@
 
     bool getMultipleDetrendingValues(Crit3DInterpolationSettings &interpolationSettings,
                                      const std::vector<double> &allProxyValues, std::vector<double> &activeProxyValues,
-                                     std::vector<std::function<double (double, std::vector<double> &)> > &myFunc,
-                                     std::vector<std::vector<double> > &myParameters);
+                                     const std::vector<std::function<double (double, std::vector<double> &)> > &myFunc,
+                                     const std::vector<std::vector<double> > &myParameters);
 
     float retrend(meteoVariable myVar, const std::vector<double>& proxyValues, Crit3DInterpolationSettings &interpolationSettings);
 
@@ -122,12 +122,16 @@
                              Crit3DClimateParameters* climateParameters,
                              Crit3DTime myTime, meteoVariable myVar, int orogProxyPos);
 
-    void optimalDetrending(meteoVariable myVar, std::vector<Crit3DMeteoPoint> &meteoPoints,
+    bool optimalDetrending(meteoVariable myVar, std::vector<Crit3DMeteoPoint> &meteoPoints,
                            std::vector<Crit3DInterpolationDataPoint> &outInterpolationPoints,
                            Crit3DInterpolationSettings &interpolationSettings, Crit3DMeteoSettings* meteoSettings,
                            Crit3DClimateParameters* climateParameters, const Crit3DTime &myTime);
 
-    std::vector<float> computeDistances(meteoVariable myVar, const std::vector<Crit3DInterpolationDataPoint> &myPoints,
+    void computeDistances(meteoVariable myVar, const std::vector<Crit3DInterpolationDataPoint> &myPoints,
+                          const Crit3DInterpolationSettings &interpolationSettings,
+                          float x, float y, float z, bool excludeSupplemental, std::vector<float> &distances);
+
+    std::vector<float> computeDistances_old(meteoVariable myVar, const std::vector<Crit3DInterpolationDataPoint> &myPoints,
                                         const Crit3DInterpolationSettings &interpolationSettings,
                                         float x, float y, float z, bool excludeSupplemental);
 
@@ -135,7 +139,7 @@
                         std::vector <Crit3DInterpolationDataPoint> &selectedPoints,
                         float x, float y, Crit3DInterpolationSettings &interpolationSettings, bool excludeSupplemental);
 
-    bool proxyValidity(std::vector<Crit3DInterpolationDataPoint> &myPoints, int proxyPos,
+    bool proxyValidity(const std::vector<Crit3DInterpolationDataPoint> &myPoints, int proxyPos,
                        float stdDevThreshold, double &avg, double &stdDev);
 
     bool proxyValidityWeighted(const std::vector<Crit3DInterpolationDataPoint> &myPoints, int proxyPos, float stdDevThreshold);

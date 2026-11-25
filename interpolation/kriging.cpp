@@ -1,331 +1,418 @@
 /*!
-     \brief Kriging Interpolator
+ * \file kriging.cpp
+ * \brief Interpolatore di Kriging ordinario (2D) - vedi kriging.h
+ */
 
-     based on: Chao-yi Lang
-     July, 1995
-     lang@cs.cornell.edu
-*/
+#include "kriging.h"
 
-    #include <stdlib.h>
-    #include <math.h>
-    #include <stdio.h>
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <numeric>
 
-    #include "kriging.h"
+namespace kriging {
 
+namespace {
 
-    /*! global variables */
-    static short mode;
-    static int dim;
-    static double range, nugget, sill, sill_nugget, slope;
-    static double *D, *V, *weight, *VM, *pos, *val;
+constexpr double NaN = std::numeric_limits<double>::quiet_NaN();
 
+/*!
+ * \brief Fattorizzazione LU in place con pivoting parziale (PA = LU).
+ * \param A   matrice n*n row-major; in uscita contiene L (sotto la diagonale, diagonale unitaria) e U
+ * \param piv in uscita: piv[k] = riga scambiata con la riga k al passo k
+ * \return false se la matrice e' singolare o numericamente degenere
+ */
+bool luDecompose(std::vector<double>& A, std::vector<int>& piv, int n)
+{
+    piv.assign(n, 0);
 
-    /*!
-     * \brief no pivoting - assume rank n
-     * \param A matrix double pointer
-     * \return true on success, false otherwise
-     */
-    bool matrixInversion(double *A)
+    double maxAbs = 0.;
+    for (double a : A)
+        maxAbs = std::max(maxAbs, std::fabs(a));
+    if (! (maxAbs > 0.) || ! std::isfinite(maxAbs))
+        return false;
+
+    const double tolerance = n * std::numeric_limits<double>::epsilon() * maxAbs;
+
+    for (int k = 0; k < n; k++)
     {
-        double *inverseA, rapporto;
-        int i, j, iter, first_row;
-
-        inverseA = (double *) malloc(sizeof(double) * dim *dim);
-
-        /*! inizializza = matrice Identita' */
-        for (i = 0; i < dim; i++)
-            for(j = 0; j < dim; j++)
-                inverseA[i*dim+j] = (i == j) ? 1. : 0. ;
-
-        /*! step 1: A diventa triangolare sup , inverseA triangolare inf */
-        for (iter = 0; iter < (dim-1); iter++)
+        /* ricerca del pivot sulla colonna k */
+        int p = k;
+        double best = std::fabs(A[k*n + k]);
+        for (int i = k + 1; i < n; i++)
         {
-            first_row = iter + 1;
-            for(i = first_row; i < dim; i++)
+            const double v = std::fabs(A[i*n + k]);
+            if (v > best)
             {
-                rapporto = A[i*dim+iter] / A[iter*dim+iter];
-                A[i*dim+iter] = 0.;
-                for(j = first_row; j < dim; j++)
-                    A[i*dim+j] -= rapporto * A[iter*dim+j];
-                for(j = 0; j <= iter; j++)
-                    inverseA[i*dim+j] -= rapporto * inverseA[iter*dim+j];
+                best = v;
+                p = i;
             }
         }
+        if (best <= tolerance)
+            return false;
 
-        /*! step 2: A diventa diagonale */
-        for (iter = dim - 1; iter > 0; iter--)
+        piv[k] = p;
+        if (p != k)
+            for (int j = 0; j < n; j++)
+                std::swap(A[k*n + j], A[p*n + j]);
+
+        /* eliminazione */
+        const double pivot = A[k*n + k];
+        for (int i = k + 1; i < n; i++)
         {
-            first_row = iter - 1;
-            for(i = first_row; i >= 0; i--)
-            {
-                rapporto = A[i*dim+iter] / A[iter*dim+iter];
-                A[i*dim+iter] = 0.;
-                for(j = 0; j < dim; j++)
-                    inverseA[i*dim+j] -= rapporto * inverseA[iter*dim+j];
-            }
+            const double factor = (A[i*n + k] /= pivot);
+            if (factor == 0.)
+                continue;
+            for (int j = k + 1; j < n; j++)
+                A[i*n + j] -= factor * A[k*n + j];
         }
+    }
+    return true;
+}
 
-        /*! step 3: divide per la diagonale e ottiene inverseA */
-        for(i = 0; i < dim; i++)
-            for (j = 0; j < dim; j++)
-                inverseA[i*dim+j] /= A[i*dim+i];
+/*! \brief Risolve LU x = P b; b viene sovrascritto con la soluzione */
+void luSolve(const std::vector<double>& LU, const std::vector<int>& piv, std::vector<double>& b, int n)
+{
+    for (int k = 0; k < n; k++)
+        if (piv[k] != k)
+            std::swap(b[k], b[piv[k]]);
 
-        /*! salva matrice inversa e libera memoria */
-        for(i = 0; i < dim; i++)
-            for (j = 0; j < dim; j++)
-                A[i*dim+j] = inverseA[i*dim+j];
-
-        free(inverseA);
-
-        return true;
+    /* sostituzione in avanti (L ha diagonale unitaria) */
+    for (int i = 1; i < n; i++)
+    {
+        double s = b[i];
+        for (int j = 0; j < i; j++)
+            s -= LU[i*n + j] * b[j];
+        b[i] = s;
     }
 
-
-
-    /*!
-     * \brief costruisce la matrice delle distanze e il variogramma
-     * \param myPos pos[N*2]	[i*2]   x i-esima stazione  [i*2+1] y i-esima stazione
-     * \param myVal dati stazione
-     * \param nrItems numero di stazioni
-     * \param myMode mode 1-Spher mode 2-Expon mode 3-Gauss mode 4-Linear mode
-     * \param myRange
-     * \param myNugget
-     * \param mySill
-     * \param mySlope
-     * \return
-     */
-    bool krigingVariogram(double *myPos, double *myVal, int nrItems, short myMode,
-                          double myRange, double myNugget, double mySill, double mySlope)
+    /* sostituzione all'indietro */
+    for (int i = n - 1; i >= 0; i--)
     {
-        int i, j;
-        double dx, dy, tmp;
-        double *Cd;
-
-        /*! global variables */
-        mode	= myMode;
-        dim		= nrItems + 1;
-        range = myRange;
-        nugget = myNugget;
-        sill = mySill;
-        slope = mySlope;
-        sill_nugget = sill - nugget;
-
-        krigingFreeMemory();
-
-        V		= (double *) malloc (sizeof (double) * dim * dim );
-        Cd		= (double *) malloc (sizeof (double) * dim * dim );
-        D		= (double *) malloc (sizeof (double) * dim);
-        weight	= (double *) malloc (sizeof (double) * dim);
-        pos		= (double *) malloc (sizeof (double) * nrItems * 2);
-        val		= (double *) malloc (sizeof (double) * nrItems);
-
-        /*! salva matrici posizione e valore */
-        for (i=0; i < nrItems; i++)
-        {
-            pos[i*2]	= myPos[i*2];
-            pos[i*2+1]	= myPos[i*2+1];
-            val[i]		= myVal[i];
-        }
-
-        /*! matrice (triangolare sup) delle distanze */
-        for (i=0; i < nrItems; i++)
-        {
-            for (j=i; j < nrItems; j++)
-            {
-                dx = pos[i*2]-pos[j*2];
-                dy = pos[i*2+1]-pos[j*2+1];
-                Cd[(i*dim)+j] = sqrt(dx * dx + dy * dy);
-            }
-        }
-
-        /*! inizializza ultima riga e colonna del variogramma
-        * es:	0 0 0 1
-        *		0 0 0 1
-        *		0 0 0 1
-        *		1 1 1 0 */
-
-        for (i = 0; i < nrItems; i++)
-        {
-            V[i*dim +dim -1] = 1;
-            V[(dim-1)*dim +i] = 1;
-        }
-        V[(dim-1)*(dim)+i] = 0;
-
-        /*! calcola il variogramma e lo salva in V */
-        for (i = 0; i < nrItems; i++)
-        {
-            for (j = i; j < nrItems; j++)
-            {
-                tmp = Cd[i*dim+j] / range;
-                switch (mode)
-                {
-                /*! Spherical */
-                    case 1 :
-                            if (Cd[i*dim+j] < range)
-                            {
-                                V[i*dim+j] = V[j*dim+i] = nugget + sill_nugget *
-                                            (1.5 * tmp - 0.5 * tmp * tmp * tmp);
-                            }
-                            else V[i*dim+j] = V[j*dim+i] = nugget + sill_nugget;
-                            break;
-                /*! Exponential */
-                    case 2 :
-                            V[i*dim+j] = V[j*dim+i] = nugget + sill_nugget *
-                                        (1. - exp(-3.* tmp));
-                            break;
-
-                /*! Gaussian */
-                    case 3 :
-                            V[i*dim+j] = V[j*dim+i] = nugget + sill_nugget *
-                                        (1. - exp(-4.* tmp * tmp));
-                            break;
-
-                /*! Linear */
-                    case 4 :
-                            V[i*dim+j] = V[j*dim+i] = nugget + slope * Cd[i*dim+j];
-                            break;
-
-                /*! Default: linear */
-                    default:
-                            V[i*dim+j] = V[j*dim+i] = nugget + slope * Cd[i*dim+j];
-                            break;
-                }
-            }
-        }
-
-        /*! inverte variogramma e libera memoria*/
-        matrixInversion(V);
-
-        free(Cd);
-
-        return true;
+        double s = b[i];
+        for (int j = i + 1; j < n; j++)
+            s -= LU[i*n + j] * b[j];
+        b[i] = s / LU[i*n + i];
     }
+}
+
+} // namespace
+
+
+const char* statusMessage(Status status)
+{
+    switch (status)
+    {
+        case Status::Ok:                return "ok";
+        case Status::NotInitialized:    return "interpolatore non inizializzato";
+        case Status::InvalidInput:      return "dati di input non validi";
+        case Status::InvalidParameters: return "parametri del variogramma non validi";
+        case Status::DuplicateStations: return "stazioni con coordinate duplicate";
+        case Status::SingularMatrix:    return "sistema di kriging singolare";
+        case Status::NegativeVariance:  return "varianza di kriging negativa (instabilita' numerica)";
+    }
+    return "errore sconosciuto";
+}
+
+
+/* ---------------------------------------------------------------- Variogram */
+
+double Variogram::operator()(double h) const
+{
+    /* gamma(0) = 0 per definizione: il nugget e' una discontinuita' all'origine */
+    if (h <= 0.)
+        return 0.;
+
+    const double structural = sill - nugget;
+    const double r = h / range;
+
+    switch (model)
+    {
+        case Model::Spherical:
+            return (h < range) ? nugget + structural * (1.5 * r - 0.5 * r * r * r)
+                               : sill;
+
+        /* range pratico: fattore 3 (convenzione GSLIB), gamma(range) ~ 95% */
+        case Model::Exponential:
+            return nugget + structural * (1. - std::exp(-3. * r));
+
+        case Model::Gaussian:
+            return nugget + structural * (1. - std::exp(-3. * r * r));
+
+        case Model::Linear:
+            return nugget + slope * h;
+    }
+    return NaN;
+}
+
+
+Status Variogram::validate() const
+{
+    if (! std::isfinite(nugget) || nugget < 0.)
+        return Status::InvalidParameters;
+
+    switch (model)
+    {
+        case Model::Linear:
+            if (! std::isfinite(slope) || slope < 0.)
+                return Status::InvalidParameters;
+            return Status::Ok;
+
+        case Model::Spherical:
+        case Model::Exponential:
+        case Model::Gaussian:
+            if (! std::isfinite(range) || range <= 0.)
+                return Status::InvalidParameters;
+            if (! std::isfinite(sill) || sill < nugget)
+                return Status::InvalidParameters;
+            return Status::Ok;
+    }
+    return Status::InvalidParameters;
+}
+
+
+/* ---------------------------------------------------------- OrdinaryKriging */
+
+double OrdinaryKriging::gammaBetween(int i, int j) const
+{
+    return _variogram(std::hypot(_x[i] - _x[j], _y[i] - _y[j]));
+}
 
 
 /*!
- * \brief assegna i pesi dei punti misura rispetto a P(x,y) e li salva nella matrice weight
- * \param x_p x point
- * \param y_p y point
- * \return true on success, false otherwise
+ * \brief Costruisce la matrice di kriging ordinario (m+1)x(m+1) sulle stazioni indicate:
+ *        | gamma_ij  1 |
+ *        |   1       0 |
  */
+void OrdinaryKriging::buildMatrix(const std::vector<int>& stations, std::vector<double>& A) const
+{
+    const int m = static_cast<int>(stations.size());
+    const int n = m + 1;
+    A.assign(static_cast<size_t>(n) * n, 0.);
+
+    for (int i = 0; i < m; i++)
+    {
+        for (int j = i + 1; j < m; j++)
+            A[i*n + j] = A[j*n + i] = gammaBetween(stations[i], stations[j]);
+        A[i*n + m] = 1.;
+        A[m*n + i] = 1.;
+    }
+    /* diagonale e angolo in basso a destra restano a 0 */
+}
+
+
+Status OrdinaryKriging::init(const double* xy, const double* values, int count,
+                             const Variogram& variogram, int maxNeighbors)
+{
+    clear();
+
+    if (xy == nullptr || values == nullptr || count < 1 || maxNeighbors < 0)
+        return Status::InvalidInput;
+
+    const Status vStatus = variogram.validate();
+    if (vStatus != Status::Ok)
+        return vStatus;
+
+    _x.resize(count);
+    _y.resize(count);
+    _val.resize(count);
+    for (int i = 0; i < count; i++)
+    {
+        _x[i]   = xy[i*2];
+        _y[i]   = xy[i*2 + 1];
+        _val[i] = values[i];
+        if (! std::isfinite(_x[i]) || ! std::isfinite(_y[i]) || ! std::isfinite(_val[i]))
+        {
+            clear();
+            return Status::InvalidInput;
+        }
+    }
+
+    /* stazioni duplicate: righe identiche nella matrice -> sistema singolare */
+    std::vector<int> order(count);
+    std::iota(order.begin(), order.end(), 0);
+    std::sort(order.begin(), order.end(), [this](int a, int b)
+              { return _x[a] < _x[b] || (_x[a] == _x[b] && _y[a] < _y[b]); });
+    for (int k = 1; k < count; k++)
+    {
+        if (_x[order[k]] == _x[order[k-1]] && _y[order[k]] == _y[order[k-1]])
+        {
+            clear();
+            return Status::DuplicateStations;
+        }
+    }
+
+    _variogram = variogram;
+    _maxNeighbors = (maxNeighbors >= count) ? 0 : maxNeighbors;
+
+    /* sistema globale: fattorizzato una sola volta, O(n^3) */
+    if (_maxNeighbors == 0)
+    {
+        std::vector<int> all(count);
+        std::iota(all.begin(), all.end(), 0);
+        buildMatrix(all, _lu);
+        if (! luDecompose(_lu, _piv, count + 1))
+        {
+            clear();
+            return Status::SingularMatrix;
+        }
+    }
+
+    _ready = true;
+    return Status::Ok;
+}
+
+
+Status OrdinaryKriging::estimate(double x, double y, double& value, double* stdDev) const
+{
+    value = NaN;
+    if (stdDev != nullptr)
+        *stdDev = NaN;
+
+    if (! _ready)
+        return Status::NotInitialized;
+    if (! std::isfinite(x) || ! std::isfinite(y))
+        return Status::InvalidInput;
+
+    const int count = size();
+
+    /* stazioni usate per questo punto */
+    std::vector<int> stations(count);
+    std::iota(stations.begin(), stations.end(), 0);
+
+    if (_maxNeighbors > 0)
+    {
+        std::vector<double> dist2(count);
+        for (int i = 0; i < count; i++)
+        {
+            const double dx = _x[i] - x;
+            const double dy = _y[i] - y;
+            dist2[i] = dx * dx + dy * dy;
+        }
+        std::nth_element(stations.begin(), stations.begin() + _maxNeighbors, stations.end(),
+                         [&dist2](int a, int b) { return dist2[a] < dist2[b]; });
+        stations.resize(_maxNeighbors);
+    }
+
+    const int m = static_cast<int>(stations.size());
+    const int n = m + 1;
+
+    /* termine noto: gamma(stazione, P) e vincolo sum(w) = 1 */
+    std::vector<double> gamma0(m);
+    std::vector<double> b(n);
+    for (int i = 0; i < m; i++)
+    {
+        const int s = stations[i];
+        gamma0[i] = _variogram(std::hypot(_x[s] - x, _y[s] - y));
+        b[i] = gamma0[i];
+    }
+    b[m] = 1.;
+
+    /* soluzione: b = [w_0 .. w_m-1, mu] */
+    if (_maxNeighbors > 0)
+    {
+        std::vector<double> lu;
+        std::vector<int> piv;
+        buildMatrix(stations, lu);
+        if (! luDecompose(lu, piv, n))
+            return Status::SingularMatrix;
+        luSolve(lu, piv, b, n);
+    }
+    else
+    {
+        luSolve(_lu, _piv, b, n);
+    }
+
+    double estimateValue = 0.;
+    double variance = b[m];                 /* moltiplicatore di Lagrange mu */
+    double magnitude = std::fabs(b[m]);     /* scala del problema, per la tolleranza sulla varianza */
+    for (int i = 0; i < m; i++)
+    {
+        estimateValue += b[i] * _val[stations[i]];
+        variance  += b[i] * gamma0[i];
+        /* gamma0 e non w*gamma0: su una stazione w ~ (0..1..0) e i prodotti sono tutti ~0,
+           la tolleranza crollerebbe al livello del rumore di arrotondamento */
+        magnitude += std::fabs(gamma0[i]);
+    }
+
+    if (! std::isfinite(estimateValue) || ! std::isfinite(variance))
+        return Status::SingularMatrix;
+
+    value = estimateValue;
+
+    /* piccoli valori negativi sono rumore di arrotondamento, valori grandi no */
+    if (variance < -1e-9 * magnitude)
+        return Status::NegativeVariance;
+
+    if (stdDev != nullptr)
+        *stdDev = std::sqrt(std::max(0., variance));
+
+    return Status::Ok;
+}
+
+
+void OrdinaryKriging::clear()
+{
+    std::vector<double>().swap(_x);
+    std::vector<double>().swap(_y);
+    std::vector<double>().swap(_val);
+    std::vector<double>().swap(_lu);
+    std::vector<int>().swap(_piv);
+    _maxNeighbors = 0;
+    _ready = false;
+}
+
+} // namespace kriging
+
+
+/* ------------------------------------------------------------------ API legacy */
+
+namespace {
+kriging::OrdinaryKriging legacyKriging;
+double legacyValue  = std::numeric_limits<double>::quiet_NaN();
+double legacyStdDev = std::numeric_limits<double>::quiet_NaN();
+}
+
+bool krigingVariogram(const double *myPos, const double *myVal, int nrItems, short myMode,
+                      double myRange, double myNugget, double mySill, double mySlope)
+{
+    legacyValue = legacyStdDev = std::numeric_limits<double>::quiet_NaN();
+
+    kriging::Variogram v;
+    /* come nella versione originale, un mode sconosciuto equivale al lineare */
+    v.model  = (myMode >= 1 && myMode <= 4) ? static_cast<kriging::Model>(myMode)
+                                             : kriging::Model::Linear;
+    v.range  = myRange;
+    v.nugget = myNugget;
+    v.sill   = mySill;
+    v.slope  = mySlope;
+
+    return legacyKriging.init(myPos, myVal, nrItems, v) == kriging::Status::Ok;
+}
+
 bool krigingSetWeight(double x_p, double y_p)
+{
+    const kriging::Status s = legacyKriging.estimate(x_p, y_p, legacyValue, &legacyStdDev);
+    if (s != kriging::Status::Ok)
     {
-        int i, j;
-        double dx, dy, tmp, h;
-
-        /*! calcola le distanze tra P e i punti di misura e calcola il variogramma (memorizzato in D) */
-        for (i=0; i < dim-1; i++)
-            {
-            dx = pos[i*2] - x_p;
-            dy = pos[i*2+1] - y_p;
-            h = sqrt(dx * dx + dy * dy);
-            tmp = h / range;
-            switch( mode )
-                {
-            /*! Sferico */
-                case 1 :
-                         if ( h < range )
-                            D[i] = nugget + sill_nugget * (1.5 * tmp - 0.5 * tmp * tmp * tmp);
-                         else
-                            D[i] = nugget + sill_nugget;
-                         break;
-            /*! Esponenziale */
-                case 2 :
-                         D[i] = nugget + sill_nugget * (1. - exp(-3.* tmp));
-                         break;
-
-            /*! Gaussiano */
-                case 3 :
-                         D[i] = nugget + sill_nugget * (1. - exp(-4.* tmp * tmp));
-                         break;
-
-            /*! Lineare */
-                case 4 :
-                         D[i] = nugget + slope * h;
-                         break;
-
-            /*! Default: Lineare */
-                default:
-                         D[i] = nugget + slope * h;
-                         break;
-                }
-        }
-        D[dim-1] = 1;
-
-        /*! calcola i pesi */
-        for (i=0; i < dim-1; i++)
-            {
-            weight[i] = 0;
-            for (j=0; j < dim; j++)
-                weight[i] += V[i*dim+j] * D[j];
-            }
-
-        return true;
+        legacyValue = legacyStdDev = std::numeric_limits<double>::quiet_NaN();
+        return false;
     }
+    return true;
+}
 
-
-/*!
- * \brief return interpolated value in the point (x_p, y_p)
- * \return result
- */
 double krigingResult()
-    {
-        double result = 0.0;
+{
+    return legacyValue;
+}
 
-        for (int i=0; i < dim-1; i++)
-            result += weight[i] * val[i];
-
-        return result;
-    }
-
-
-
-/*!
- * \brief Root Mean Square Error
- * \return result
- */
-double krigingRMSE()
-    {
-        double error = 0.0;
-
-        for (int i=0; i < dim-1; i++)
-            error += weight[i] * D[i];
-
-        return sqrt(fabs(error));
-    }
-
-
+double krigingStdDev()
+{
+    return legacyStdDev;
+}
 
 void krigingFreeMemory()
-    {
-        if (V != nullptr)
-        {
-            free(V);
-            V = nullptr;
-        }
-        if (VM != nullptr)
-        {
-            free(VM);
-            VM = nullptr;
-        }
-        if (pos != nullptr)
-        {
-            free(pos);
-            pos = nullptr;
-        }
-        if (val != nullptr)
-        {
-            free(val);
-            val = nullptr;
-        }
-        if (D != nullptr)
-        {
-            free(D);
-            D = nullptr;
-        }
-        if (weight != nullptr)
-        {
-            free(weight);
-            weight = nullptr;
-        }
-    }
+{
+    legacyKriging.clear();
+    legacyValue = legacyStdDev = std::numeric_limits<double>::quiet_NaN();
+}

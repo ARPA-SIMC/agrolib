@@ -10,12 +10,14 @@
     #ifndef INTERPOLATIONSETTINGS_H
         #include "interpolationSettings.h"
     #endif
+    #include <memory>
 
     class Crit3DInterpolationDataPoint {
     private:
 
     public:
-        gis::Crit3DPoint* point;
+        std::shared_ptr<gis::Crit3DPoint> point;     // shared by the copies of the data point, freed with the last one
+
         int index;
         bool isActive;
         bool isMarked;

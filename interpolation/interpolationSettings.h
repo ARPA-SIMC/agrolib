@@ -69,10 +69,12 @@
         void setGridName(const std::string &value);
 
         void setRegressionR2(float myValue);
-        float getRegressionR2();
+        float getRegressionR2() const;
         void setRegressionSlope(float myValue);
-        float getRegressionSlope();
-        double getValue(unsigned int pos, std::vector<double> proxyValues) const;
+        float getRegressionSlope() const;
+
+        double getValue(unsigned int pos, const std::vector<double> &proxyValues) const;
+
         float getLapseRateH1() const;
         void setLapseRateH1(float value);
         float getLapseRateH0() const;
@@ -87,9 +89,6 @@
         void setProxyTable(const std::string &value);
         std::string getProxyField() const;
         void setProxyField(const std::string &value);
-
-        std::vector<gis::Crit3DRasterGrid *> getGridSeries() const;
-        void setGridSeries(const std::vector<gis::Crit3DRasterGrid *> &value);
 
         float getLapseRateT0() const;
         void setLapseRateT0(float newLapseRateT0);
@@ -129,18 +128,20 @@
         void clear();
         void addProxyActive(bool value) { _isActiveList.push_back(value); }
         void setProxyActive(unsigned index, bool value) { _isActiveList[index] = value; }
-        bool isProxyActive(unsigned index)
+        bool isProxyActive(unsigned index) const
         {
             if (index < _isActiveList.size())
                 return _isActiveList[index];
             else
                 return false;
         }
-        std::vector<bool> getActiveList() { return _isActiveList; }
+
+        const std::vector<bool> &getActiveList() const
+        { return _isActiveList; }
 
         void addProxySignificant(bool value) { _isSignificantList.push_back(value); }
         void setProxySignificant(unsigned index, bool value) { _isSignificantList[index] = value; }
-        bool isProxySignificant(unsigned index)
+        bool isProxySignificant(unsigned index) const
         {
             if (index < _isSignificantList.size())
                 return _isSignificantList[index];
@@ -217,7 +218,6 @@
         bool useTD;
         bool useLocalDetrending;
 		bool useGlocalDetrending;
-        int maxTdMultiplier;
         bool useLapseRateCode;
         bool useBestDetrending;
         bool useMultipleDetrending;
@@ -304,9 +304,10 @@
 
         const Crit3DMacroArea& getMacroArea(int index) const
         {
-            if (index >= (int)macroAreas.size())
+            if (index < 0 || index >= int(macroAreas.size()))
             {
-                return *(new(Crit3DMacroArea));
+                static const Crit3DMacroArea emptyArea;
+                return emptyArea;
             }
             return macroAreas[index];
         }
@@ -327,7 +328,7 @@
 
         double getTopoDist_Kh() const { return topoDist_Kh; }
 
-        Crit3DProxyCombination getSelectedCombination() const { return selectedCombination; }
+        const Crit3DProxyCombination &getSelectedCombination() const { return selectedCombination; }
 
         unsigned getIndexHeight() const { return indexHeight; }
 
@@ -335,9 +336,10 @@
 
         bool getMeteoGridUpscaleFromDem() const { return meteoGridUpscaleFromDem; }
 
-        std::vector<double> getPointsRange() const { return pointsRange; }
+        const std::vector<double> &getPointsRange() const { return pointsRange; }
 
-        std::vector<std::vector<double>> getFittingParameters() const { return fittingParameters; }
+        const std::vector<std::vector<double>>& getFittingParameters() const { return fittingParameters; }
+        std::vector<std::vector<double>>& getFittingParameters() { return fittingParameters; }
 
         bool getUseMultipleDetrending() const { return useMultipleDetrending; }
 
@@ -346,7 +348,7 @@
         float getLocalRadius() const { return localRadius; }
 
         void addProxy(Crit3DProxy myProxy, bool isActive_);
-        double getProxyValue(unsigned pos, std::vector<double> proxyValues) const;
+        double getProxyValue(unsigned pos, const std::vector<double> &proxyValues) const;
         bool getCombination(int combinationInteger, Crit3DProxyCombination &outCombination);
         int getProxyPosFromName(TProxyVar name) const;
 
@@ -371,8 +373,7 @@
         void setUseLapseRateCode(bool value);
         void setUseBestDetrending(bool value);
         void setMeteoGridAggrMethod(const aggregationMethod &value);
-        void setShepardInitialRadius(float value);
-        void setIndexPointCV(int value);
+
         void setCurrentDEM(gis::Crit3DRasterGrid *value);
 
         void setTopoDist_maxKh(double value)
@@ -381,12 +382,10 @@
         void setTopoDist_Kh(double value)
         { topoDist_Kh = value; }
 
-        Crit3DProxyCombination getOptimalCombination() const;
-        void setOptimalCombination(const Crit3DProxyCombination &value);
         void setSelectedCombination(const Crit3DProxyCombination &value);
         void setActiveSelectedCombination(unsigned int index, bool isActive);
         void setIndexHeight(unsigned value);
-        Crit3DProxyCombination getCurrentCombination() const;
+        const Crit3DProxyCombination &getCurrentCombination() const;
         void setCurrentCombination(Crit3DProxyCombination value);
         void setSignificantCurrentCombination(unsigned int index, bool isSignificant);
 
@@ -405,10 +404,11 @@
         void setLocalRadius(float newLocalRadius);
         void setMinPointsLocalDetrending(int newMinPointsLocalDetrending);
 
-        std::vector<double> getProxyFittingParameters(int tempIndex);
+        const std::vector<double> &getProxyFittingParameters(int tempIndex);
         void setFittingParameters(const std::vector<std::vector <double>> &newFittingParameters);
         void addFittingParameters(const std::vector<std::vector<double> > &newFittingParameters);
-        std::vector<std::function<double (double, std::vector<double> &)> > getFittingFunction() const;
+
+        const std::vector<std::function<double (double, std::vector<double> &)> > &getFittingFunction() const;
         void setFittingFunction(const std::vector<std::function<double (double, std::vector<double> &)> > &newFittingFunction);
         void addFittingFunction(const std::function<double (double, std::vector<double> &)> &newFittingFunction);
         void clearFitting();

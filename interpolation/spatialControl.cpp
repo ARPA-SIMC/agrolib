@@ -38,7 +38,7 @@ float getSpatialThresholdVar(meteoVariable myVar, Crit3DMeteoSettings* meteoSett
         zWeight = avgDeltaZ / 100.f;
         distWeight = minDistance / 1000.f;
 
-        threshold = std::min(std::min(distWeight + threshold + zWeight, 12.f) + stdDev * nrStdDev, 15.f);
+        threshold += std::min(distWeight + zWeight + stdDev * nrStdDev, 14.f);
     }
     else if (   myVar == airRelHumidity
              || myVar == dailyAirRelHumidityMax
@@ -108,18 +108,19 @@ bool computeResiduals(meteoVariable myVar, std::vector<Crit3DMeteoPoint> &meteoP
     if (myVar == noMeteoVar)
         return false;
 
-    std::vector <double> myProxyValues;
-    bool isValid;
+    if (meteoSettings == nullptr)
+        return false;
 
     for (size_t i = 0; i < meteoPoints.size(); i++)
     {
-        myProxyValues = meteoPoints[i].getProxyValues();
+        const std::vector <double> &myProxyValues = meteoPoints[i].getProxyValues();
 
         meteoPoints[i].residual = NODATA;
 
         if (meteoPoints[i].active)
         {
-            isValid = (! excludeSupplemental || checkLapseRateCode(meteoPoints[i].lapseRateCode, interpolationSettings.getUseLapseRateCode(), false));
+            bool isValid = ( !excludeSupplemental
+                       || checkLapseRateCode(meteoPoints[i].lapseRateCode, interpolationSettings.getUseLapseRateCode(), false));
             isValid = (isValid && (! excludeOutsideDem || meteoPoints[i].isInsideDem));
 
             if (isValid && meteoPoints[i].quality == quality::accepted)
@@ -132,15 +133,15 @@ bool computeResiduals(meteoVariable myVar, std::vector<Crit3DMeteoPoint> &meteoP
                                                       float(meteoPoints[i].point.z),
                                                       myProxyValues, false);
 
-                if (  myVar == precipitation || myVar == dailyPrecipitation)
+                if (myVar == precipitation || myVar == dailyPrecipitation)
                 {
-                    if (myValue != NODATA)
+                    if (! isEqual(myValue, NODATA))
                     {
                         if (myValue < meteoSettings->getRainfallThreshold())
-                            myValue=0.;
+                            myValue = 0.;
                     }
 
-                    if (interpolatedValue != NODATA)
+                    if (! isEqual(interpolatedValue, NODATA))
                     {
                         if (interpolatedValue < meteoSettings->getRainfallThreshold())
                             interpolatedValue=0.;
@@ -149,7 +150,7 @@ bool computeResiduals(meteoVariable myVar, std::vector<Crit3DMeteoPoint> &meteoP
 
                 // TODO derived var
 
-                if ((interpolatedValue != NODATA) && (myValue != NODATA))
+                if (!isEqual(interpolatedValue, NODATA) && !isEqual(myValue, NODATA))
                 {
                     meteoPoints[i].residual = myValue - interpolatedValue;
                 }
@@ -157,6 +158,8 @@ bool computeResiduals(meteoVariable myVar, std::vector<Crit3DMeteoPoint> &meteoP
         }
     }
 
+    // residuals may all be NODATA (e.g. a single valid station)
+    // it is not an error, computeErrorCrossValidation returns NODATA in that case
     return true;
 }
 
@@ -167,34 +170,30 @@ bool computeResidualsLocalDetrending(meteoVariable myVar, const Crit3DTime &myTi
                                      Crit3DMeteoSettings* meteoSettings, Crit3DClimateParameters* climateParameters,
                                      bool excludeOutsideDem, bool excludeSupplemental)
 {
-    if (myVar == noMeteoVar) return false;
-
-    std::vector <double> myProxyValues;
-    bool isValid;
-    std::string errorStdString;
+    if (myVar == noMeteoVar)
+        return false;
 
     for (size_t i = 0; i < meteoPoints.size(); i++)
     {
-        myProxyValues = meteoPoints[i].getProxyValues();
+        const auto& myProxyValues = meteoPoints[i].getProxyValues();
 
         meteoPoints[i].residual = NODATA;
 
         if (meteoPoints[i].active)
         {
-
-            isValid = (! excludeSupplemental || checkLapseRateCode(meteoPoints[i].lapseRateCode, interpolationSettings.getUseLapseRateCode(), false));
+            bool isValid = (! excludeSupplemental || checkLapseRateCode(meteoPoints[i].lapseRateCode, interpolationSettings.getUseLapseRateCode(), false));
             isValid = (isValid && (! excludeOutsideDem || meteoPoints[i].isInsideDem));
 
             if (isValid && meteoPoints[i].quality == quality::accepted)
             {
                 float myValue = meteoPoints[i].currentValue;
 
-                bool excludeSupplemental = false;
                 std::vector <Crit3DInterpolationDataPoint> subsetInterpolationPoints;
                 if (! localSelection(interpolationPoints, subsetInterpolationPoints, float(meteoPoints[i].point.utm.x),
                                     float(meteoPoints[i].point.utm.y), interpolationSettings, excludeSupplemental))
                     return false;
 
+                std::string errorStdString;
                 if (! preInterpolation(subsetInterpolationPoints, interpolationSettings, meteoSettings,
                                       climateParameters, meteoPoints, myVar, myTime, errorStdString))
                     return false;
@@ -398,7 +397,6 @@ bool spatialQualityControl(meteoVariable myVar, std::vector<Crit3DMeteoPoint> &m
             return false;
         }
 
-        // compute residuals
         if (! computeResiduals(myVar, meteoPoints, myInterpolationPoints, interpolationSettings, meteoSettings, false, false))
         {
             errorStr = "Error in compute residuals.";
@@ -416,6 +414,11 @@ bool spatialQualityControl(meteoVariable myVar, std::vector<Crit3DMeteoPoint> &m
                 {
                     myValue = meteoPoints[i].currentValue;
                     myResidual = meteoPoints[i].residual;
+
+                    // residual not computable: no evidence against the station
+                    if (isEqual(myResidual, NODATA))
+                        continue;
+
                     stdDev = std::max(stdDev, myValue/100.f);
                     if (fabs(myResidual) > getSpatialThresholdVar(myVar, meteoSettings, myValue, stdDev, 2, avgDeltaZ, minDist))
                     {
@@ -448,7 +451,10 @@ bool spatialQualityControl(meteoVariable myVar, std::vector<Crit3DMeteoPoint> &m
 
                     myValue = meteoPoints[listIndex[i]].currentValue;
 
-                    listResiduals.push_back(interpolatedValue - myValue);
+                    if (isEqual(interpolatedValue, NODATA))
+                        listResiduals.push_back(NODATA);
+                    else
+                        listResiduals.push_back(interpolatedValue - myValue);
                 }
 
                 for (size_t i=0; i < listIndex.size(); i++)
@@ -460,6 +466,10 @@ bool spatialQualityControl(meteoVariable myVar, std::vector<Crit3DMeteoPoint> &m
                              nrPointsMax, stdDev, avgDeltaZ, minDist))
                     {
                         myResidual = listResiduals[i];
+
+                        // the station failed the first check and cannot be re-evaluated: keep the flag
+                        if (isEqual(myResidual, NODATA))
+                            continue;
 
                         myValue = meteoPoints[listIndex[i]].currentValue;
 

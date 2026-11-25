@@ -24,9 +24,10 @@
 */
 
 
-#include "interpolationPoint.h"
-#include "gis.h"
 #include "commonConstants.h"
+#include "gis.h"
+#include "meteo.h"
+#include "interpolationPoint.h"
 
 
 Crit3DInterpolationDataPoint::Crit3DInterpolationDataPoint()
@@ -42,7 +43,7 @@ Crit3DInterpolationDataPoint::Crit3DInterpolationDataPoint()
 
     topographicDistanceMap = nullptr;
 
-    point = new gis::Crit3DPoint();
+    point = std::make_shared<gis::Crit3DPoint>();
     proxyValues.clear();
 }
 

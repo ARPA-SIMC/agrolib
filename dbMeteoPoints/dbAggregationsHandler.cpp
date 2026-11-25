@@ -326,8 +326,10 @@ std::vector<float> Crit3DAggregationsDbHandler::getAggrData(QString aggrType, QS
     QDate date;
     float value;
 
-    QString statement = QString( "SELECT * FROM `%1_%2_%3` WHERE date_time >= DATE('%4') AND date_time < DATE('%5', '+1 day') AND id_variable = '%6'")
-                                .arg(zone).arg(aggrType).arg(periodType).arg(startDate.toString("yyyy-MM-dd")).arg(endDate.toString("yyyy-MM-dd")).arg(idVariable);
+    QString statement = QString( "SELECT * FROM `%1_%2_%3` WHERE date_time >= DATE('%4') "
+                                "AND date_time < DATE('%5', '+1 day') AND id_variable = '%6'")
+                                .arg(zone).arg(aggrType, periodType, startDate.toString("yyyy-MM-dd"), endDate.toString("yyyy-MM-dd"))
+                                .arg(idVariable);
     QSqlQuery qry(statement, _db);
 
     if( !qry.exec() )
@@ -469,8 +471,8 @@ bool Crit3DAggregationsDbHandler::renameColumn(QString oldColumn, QString newCol
     }
     foreach (QString table, tablesList)
     {
-        QString statement = QString( "ALTER TABLE `%1` RENAME COLUMN %2 TO %3").arg(table).arg(oldColumn).arg(newColumn);
-        if(!qry.exec(statement) )
+        QString statement = QString( "ALTER TABLE `%1` RENAME COLUMN %2 TO %3").arg(table, oldColumn, newColumn);
+        if(! qry.exec(statement) )
         {
             _error = qry.lastError().text();
             return false;

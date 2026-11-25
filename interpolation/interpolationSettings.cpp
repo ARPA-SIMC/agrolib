@@ -81,7 +81,7 @@ void Crit3DInterpolationSettings::setCurrentCombination(Crit3DProxyCombination v
     currentCombination = value;
 }
 
-Crit3DProxyCombination Crit3DInterpolationSettings::getCurrentCombination() const
+const Crit3DProxyCombination& Crit3DInterpolationSettings::getCurrentCombination() const
 {
     return currentCombination;
 }
@@ -99,6 +99,14 @@ const std::vector<Crit3DProxy>& Crit3DInterpolationSettings::getCurrentProxyList
 void Crit3DInterpolationSettings::setCurrentProxyList(const std::vector<Crit3DProxy> &proxyList)
 {
     currentProxyList = proxyList;
+
+    // keep indexHeight consistent with the list (retrend relies on it)
+    indexHeight = unsigned(NODATA);
+    for (unsigned i = 0; i < unsigned(currentProxyList.size()); i++)
+    {
+        if (getProxyPragaName(currentProxyList[i].getName()) == proxyHeight)
+            indexHeight = i;
+    }
 }
 
 void Crit3DInterpolationSettings::setUseInterpolatedTForRH(bool value)
@@ -158,7 +166,7 @@ void Crit3DInterpolationSettings::setMinPointsLocalDetrending(int newMinPointsLo
     minPointsLocalDetrending = newMinPointsLocalDetrending;
 }
 
-std::vector<double> Crit3DInterpolationSettings::getProxyFittingParameters(int tempIndex)
+const std::vector<double> &Crit3DInterpolationSettings::getProxyFittingParameters(int tempIndex)
 {
     if (tempIndex < int(fittingParameters.size()))
     {
@@ -183,7 +191,7 @@ void Crit3DInterpolationSettings::addFittingParameters(const std::vector<std::ve
     }
 }
 
-std::vector<std::function<double (double, std::vector<double> &)>> Crit3DInterpolationSettings::getFittingFunction() const
+const std::vector<std::function<double (double, std::vector<double> &)> > &Crit3DInterpolationSettings::getFittingFunction() const
 {
     return fittingFunction;
 }
@@ -339,6 +347,7 @@ void Crit3DInterpolationSettings::initialize()
 	useGlocalDetrending = false;
     useExcludeStationsOutsideDEM = false;
     topoDist_maxKh = 128;
+    topoDist_Kh = 0;
     useDewPoint = true;
     useInterpolatedTForRH = true;
     useMultipleDetrending = false;
@@ -693,6 +702,9 @@ Crit3DProxy::Crit3DProxy()
     lapseRateH1 = NODATA;
     lapseRateT0 = NODATA;
     lapseRateT1 = NODATA;
+
+    regressionIntercept = NODATA;
+    fittingFunctionName = noFunction;
     inversionLapseRate = NODATA;
     inversionIsSignificative = false;
 
@@ -763,16 +775,16 @@ void Crit3DProxy::setInversionIsSignificative(bool value)
 void Crit3DProxy::setRegressionR2(float myValue)
 { regressionR2 = myValue;}
 
-float Crit3DProxy::getRegressionR2()
+float Crit3DProxy::getRegressionR2() const
 { return regressionR2;}
 
 void Crit3DProxy::setRegressionSlope(float myValue)
 { regressionSlope = myValue;}
 
-float Crit3DProxy::getRegressionSlope()
+float Crit3DProxy::getRegressionSlope() const
 { return regressionSlope;}
 
-double Crit3DProxy::getValue(unsigned int pos, std::vector <double> proxyValues) const
+double Crit3DProxy::getValue(unsigned int pos, const std::vector <double>& proxyValues) const
 {
     if (pos < proxyValues.size())
         return proxyValues[pos];
@@ -807,7 +819,7 @@ void Crit3DInterpolationSettings::addProxy(Crit3DProxy myProxy, bool isActive_)
 }
 
 
-double Crit3DInterpolationSettings::getProxyValue(unsigned pos, std::vector <double> proxyValues) const
+double Crit3DInterpolationSettings::getProxyValue(unsigned pos, const std::vector <double> &proxyValues) const
 {
     if (pos < currentProxyList.size())
         return currentProxyList[pos].getValue(pos, proxyValues);
